@@ -1,7 +1,12 @@
 # Protocole UART PaxOS
 
 # Usage de ce dépôt GitHub
-Ce dépôt contient 
+(A l'heure actuelle, aucune implémentation n'est terminée, et la V1 du protcole ne l'est probablement pas non plus)
+
+Ce dépôt contient une implémentation rudimentaire du protocole en C++. Pour l'intégrer au PaxOS, il faut faire abstraction des fichiers keyboard et main, et copier les autres dans la source. Appeller `uart_init` au démarrage pour initialiser le protocole. Il faudra également ajouter les nécéssités d'intégration au reste du code, majoritairement dans `handlers.cpp`.
+Cette implémentation est agencée pour tourner sur mon installation personnelle. Pensez à modifier avant de flasher.
+
+Ce dépôt contient aussi les implémentations pour l'hôte, en Python et en JavaScript (passe par la technologie WebSerial).
 
 # Pratiques de mise en oeuvre
 Ce protocole sera peut-être étendu plus tard, ce qui justifie la présence de versions.
