@@ -1,19 +1,20 @@
 # Protocole UART PaxOS
 
-## Pratiques de mise en oeuvre
+# Usage de ce dépôt GitHub
+Ce dépôt contient 
+
+# Pratiques de mise en oeuvre
 Ce protocole sera peut-être étendu plus tard, ce qui justifie la présence de versions.
 
-Les identifiants utilisables par les packets suivant ce modèle sont situés entre `0x00` et `0x7F`.
-Les packets réponses doivent impérativement utiliser la même version que le packet de demande envoyé par l'hôte.
+Ce protocole est basé la plupart du temps sur un modèle de Demande/Réponse.
+Les identifiants utilisables par les packets suivant ce modèle sont situés entre `0x00` et `0xEF`.
+Les packets réponses doivent impérativement utiliser la même version que le packet de demande le précédent.
 
-Si les appareils veulent envoyer des données par eux-mêmes, cela demande que l'hôte soit prêt à recevoir des packets non ordonnés, et pour cela il devra le lui faire savoir avec le [packet d'annonce `0x7E`](#packet-0x7e). Les identifiants utilisables par les packets non ordonnés se situent entre `0x80` et `0xFF`.
-Les packets non ordonnés doivent impérativement utiliser la même version que le packet d'annonce envoyé par l'hôte.
-
-Les magics numbers font toujours 2 octets: le premier octet différencie la version et le 2ème le packet différencie le type de packet (base, followup, microréponse...)
+Les magics numbers font toujours 2 octets: le premier octet différencie la version et le 2ème le packet différencie le type de packet (base, followup, microréponse)
 
 Si une donnée non compréhensible intervient dans l'échange, ou qu'un timeout est atteint, le destinataire doît envoyer une microréponse de version 1, avec un statut de `0xA2`. Il est conseillé d'attendre la fin de la récéption de données après l'envoi de cette microréponse.
 
-# Configruation UART
+# Configuration UART
 - Fréquence: 115200 Hz
 - Pas de parité
 - Données de 8 bits
@@ -131,7 +132,7 @@ Propose à l'appareil l'installation d'une application tierce.
 
 Réponse de l'appareil concernant la demande d'installation d'une application tierce.
 Pour que cette réponse soit envoyée, l'utilisateur doit effectuer une confirmation sur l'écran de l'appareil, et l'appareil doit vérifier qu'il dispose des capacités pour stocker cette installation.
-Noter que le manifest ne sera pas envoyé pendant cette installation, il devra être écrit dans la mémoire à partir du contenu du [packet `0x10`](#packet-0x10) précédemment envoyé.
+Noter que le manifest ne sera pas envoyé pendant cette installation, il devra être écrit dans la mémoire à partir du contenu du [packet `0x10`](#packet-install_app_req-0x10) précédemment envoyé.
 
 - Identifiant d'upload: 2 octets
 
@@ -198,7 +199,7 @@ Indique l'échec ou la réussite du transfert d'un fichier.
 - Erreur: 1 octet
   - `0x00`: Succès du transfert. L'hôte doit passer au fichier suivant.
   - `0x01`: La signature de sureté ne correspond pas. L'hôte doit réessayer ce transfert.
-  - `0x02`: La mémoire des fichiers uploadés jusqu'à maintenant dépasse celle annoncée dans le [packet `0x10`](#packet-0x10) précédemment envoyé. L'installation s'arrête.
+  - `0x02`: La mémoire des fichiers uploadés jusqu'à maintenant dépasse celle annoncée dans le [packet `0x10`](#packet-install_app_req-0x10) précédemment envoyé. L'installation s'arrête.
   - `0x03`: L'identifiant d'upload n'est pas reconnu ou l'installation s'est déjà terminée. L'installation s'arrête.
   - `0x04`: Le nom du fichier est invalide. L'installation s'arrête.
   - `0x05`: Le délai d'attente à été dépassé pour l'envoi du packet (maximum 5s d'attente entre chaque octet). L'hôte doit réessayer ce transfert.
