@@ -131,7 +131,7 @@ class ConnectionV1(Connection):
 
         # Receive followup packets
         for _ in range(following):
-            body += self.__recvFollowupPacket()
+            body += self.__recvFollowupPacket(expectedID)
         
         return body
 
@@ -165,7 +165,7 @@ class ConnectionV1(Connection):
             return (body, following)
 
     
-    def __recvFollowupPacket(self) -> bytes:
+    def __recvFollowupPacket(self, expectedID: int) -> bytes:
         while True:
             if self.recvRaw(2) != bytes([0x91, 0xc2]):
                 self.__sendMicroresponse(0xff, Microresponses.FATAL)
@@ -248,7 +248,7 @@ def paxoConnect(port: str) -> Connection:
 
 def main():
     conn = paxoConnect("/dev/ttyACM0")
-    print("I'm using version", conn.version)
+    print("Hey! I'm using version", conn.version)
 
 if __name__ == "__main__":
     main()
