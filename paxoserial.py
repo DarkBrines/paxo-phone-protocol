@@ -55,6 +55,7 @@ class Connection:
 
 class ConnectionV1(Connection):
     version = 1
+    tridCounter = 0
 
     def sendRaw(self, data: bytes):
         print(f"Writing to UART: {data.hex()}")
@@ -77,20 +78,23 @@ class ConnectionV1(Connection):
         if following == 0:
             self.__sendBasePacket(id, data, 0)
         else:
-            self.__sendBasePacket(id, data[:2048], following)
+            trid = self.__sendBasePacket(id, data[:2048], following)
             for i in range(following):
                 if i != len(following)-1:
-                    self.__sendFollowupPacket(data[(2048 * i):(2048 * (i+1))])
+                    self.__sendFollowupPacket(data[(2048 * i):(2048 * (i+1))], trid)
                 else: # Last one
-                    self.__sendFollowupPacket(data[(2048 * i):(2048 * i + lastPacketSize)])
+                    self.__sendFollowupPacket(data[(2048 * i):(2048 * i + lastPacketSize)], trid)
 
 
-    def __sendBasePacket(self, id: int, data: bytes, following: int):
+    def __sendBasePacket(self, msgid: int, data: bytes, following: int) -> int:
+        self.tridCounter += 1
+        trid = self.tridCounter
         while True:
             payload = bytes([0x91, 0xc1])
-            payload += id.to_bytes(1, "little", signed=False)
-            payload += len(data).to_bytes(2, "little", signed=False)
+            payload += trid.to_bytes(2, "little", signed=False)
+            payload += msgid.to_bytes(1, "little", signed=False)
             payload += following.to_bytes(4, "little", signed=False)
+            payload += len(data).to_bytes(2, "little", signed=False)
             payload += data
             payload += crc8.checksum(payload).to_bytes(1, "little")
 
@@ -102,9 +106,10 @@ class ConnectionV1(Connection):
             break
 
 
-    def __sendFollowupPacket(self, data: bytes):
+    def __sendFollowupPacket(self, data: bytes, trid: int):
         while True:
             payload = bytes([0x91, 0xc2])
+            payload += trid.to_bytes(2, "little", signed=False)
             payload += len(data).to_bytes(2, "little", signed=False)
             payload += data
             payload += crc8.checksum(payload).to_bytes(1, "little")
@@ -117,9 +122,9 @@ class ConnectionV1(Connection):
             break
 
 
-    def __sendMicroresponse(self, id: int, status: int):
+    def __sendMicroresponse(self, trid: int, status: int):
         payload = bytes([0x91, 0xc3])
-        payload += id.to_bytes(1, "little", signed=False)
+        payload += trid.to_bytes(2, "little", signed=False)
         payload += status.to_bytes(1, "little", signed=False)
 
         self.sendRaw(payload)
@@ -127,80 +132,87 @@ class ConnectionV1(Connection):
 
     def recv(self, expectedID: int) -> bytes:
         # Receive base packet
-        body, following = self.__recvBasePacket(expectedID)
+        trid, _, following, body = self.__recvBasePacket(expectedID)
 
         # Receive followup packets
         for _ in range(following):
-            body += self.__recvFollowupPacket(expectedID)
+            body += self.__recvFollowupPacket(trid)
         
         return body
 
-    def __recvBasePacket(self, expectedID: int) -> (bytes, int):
+    def __recvBasePacket(self, expectedID = -1) -> (int, int, int, bytes):
         while True:
             if self.recvRaw(2) != bytes([0x91, 0xc1]):
                 self.__sendMicroresponse(0xff, Microresponses.FATAL)
                 raise Exception("Unexpected magic numbers received")
 
-            if self.recvRaw(1) != expectedID.to_bytes(1, "little"):
-                self.__sendMicroresponse(0xff, Microresponses.FATAL)
-                raise Exception("Unexpected packet ID received")
+            trid = int.from_bytes(self.recvRaw(2), "little")
 
-            bodylen = int.from_bytes(self.recvRaw(2), "little")
+            # If expectedID is not specified, any packet will be received
+            msgid = self.recvRaw(1)[0]
+            if expectedID != -1 and msgid != expectedID:
+                continue
+
             following = int.from_bytes(self.recvRaw(4), "little")
+            bodylen = int.from_bytes(self.recvRaw(2), "little")
             body = self.recvRaw(bodylen)
 
             # Check CRC
             crc = crc8.checksum(bytes(
                 bytes([0x91, 0xc1])
-                + expectedID.to_bytes(1, "little") 
-                + bodylen.to_bytes(2, "little") 
+                + trid.to_bytes(2, "little")
+                + msgid.to_bytes(1, "little") 
                 + following.to_bytes(4, "little")
+                + bodylen.to_bytes(2, "little") 
                 + body))
         
             if self.recvRaw(1)[0] != crc:
-                self.__sendMicroresponse(expectedID, Microresponses.FAIL)
+                self.__sendMicroresponse(trid, Microresponses.FAIL)
                 continue
 
-            self.__sendMicroresponse(expectedID, Microresponses.SUCCESS)
-            return (body, following)
+            self.__sendMicroresponse(trid, Microresponses.SUCCESS)
+            return (trid, msgid, following, body)
 
     
-    def __recvFollowupPacket(self, expectedID: int) -> bytes:
+    def __recvFollowupPacket(self, trid: int) -> bytes:
         while True:
             if self.recvRaw(2) != bytes([0x91, 0xc2]):
                 self.__sendMicroresponse(0xff, Microresponses.FATAL)
                 raise Exception("Unexpected magic numbers received")
+
+            rtrid = int.from_bytes(self.recvRaw(2), "little")
+            if rtrid != trid:
+                raise Exception("Unexpected transmission ID received")
 
             bodylen = int.from_bytes(self.recvRaw(2), "little")
             body = self.recvRaw(bodylen)
 
             # Check CRC
             crc = crc8.checksum(bytes(
-                [0x91, 0xc2] 
+                [0x91, 0xc2]
+                + rtrid.to_bytes(2, "little")
                 + bodylen.to_bytes(2, "little") 
                 + body))
         
             if self.recvRaw(1)[0] != crc:
-                self.__sendMicroresponse(expectedID, Microresponses.FAIL)
+                self.__sendMicroresponse(trid, Microresponses.FAIL)
                 continue
 
-            self.__sendMicroresponse(expectedID, Microresponses.SUCCESS)
+            self.__sendMicroresponse(trid, Microresponses.SUCCESS)
             return body
 
 
     def __recvMicroresponse(self) -> int:
         if self.recvRaw(2) != bytes([0x91, 0xc3]):
-            time.sleep(5)
-            print(self.ser.read_all().hex())
             raise Exception("Unexpected magic numbers received")
 
-        id = self.recvRaw(1)[0]
+        trid = self.recvRaw(2)[0]
         status = self.recvRaw(1)[0]
 
         if status == Microresponses.FATAL:
-            raise Exception(f"A fatal error occured while transporting packet of ID {id}")
+            raise Exception(f"A fatal error occured while the transmission {id}.")
         elif status == Microresponses.FAIL:
-            logging.warning(f"A softfail error occured while transporting packet of ID {id}. The packet will be resent.")
+            logging.warning(f"A softfail error occured while the transmission {id}. The packet will be resent.")
 
         return status
 
