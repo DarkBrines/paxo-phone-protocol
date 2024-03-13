@@ -44,21 +44,21 @@
 #include "txhandlers.hpp"
 struct rxTransmission
 {
-    packetRxHandler handler;
+    transmissionRxHandler handler;
     void *ctx;
     uint32_t following;
 };
 
 struct txTransmission
 {
-    packetTxHandler handler;
+    transmissionTxHandler handler;
     void *ctx;
     uint32_t following;
     uint32_t successful;
 };
 
 void uart_init();
+void uart_free();
 
 // This function will return true when the write was a success, and false otherwise.
-bool uart_protocol_write_base_v1(uint8_t id, uint32_t following, uint8_t *body, uint16_t bodylen);
-bool uart_protocol_write_followup_v1(uint8_t id, uint8_t *body, uint16_t bodylen);
+void uart_protocol_start_transmission(uint8_t msgid, transmissionTxHandler handler, void *ctx, uint16_t followups);

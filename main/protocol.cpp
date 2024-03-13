@@ -15,7 +15,7 @@ void uart_write(uint8_t *buf, size_t len)
 uint16_t txTransmissionCounter;
 std::map<uint16_t, txTransmission> txTransmissions;
 
-bool uart_protocol_write_base_v1(uint16_t trid, uint8_t msgid, uint32_t following, uint8_t *body, uint16_t bodylen)
+void uart_protocol_write_base_v1(uint16_t trid, uint8_t msgid, uint32_t following, uint8_t *body, uint16_t bodylen)
 {
     uint8_t crc;
 
@@ -39,11 +39,9 @@ bool uart_protocol_write_base_v1(uint16_t trid, uint8_t msgid, uint32_t followin
     crc = crc8(crc, body, bodylen);
 
     uart_write(&crc, 1);
-
-    return false;
 }
 
-bool uart_protocol_write_followup_v1(uint16_t trid, uint8_t *body, uint16_t bodylen)
+void uart_protocol_write_followup_v1(uint16_t trid, uint8_t *body, uint16_t bodylen)
 {
     uint8_t crc;
 
@@ -61,9 +59,6 @@ bool uart_protocol_write_followup_v1(uint16_t trid, uint8_t *body, uint16_t body
     crc = crc8(crc, body, bodylen);
 
     uart_write(&crc, 1);
-
-    // Will trigger if any byte is incorrect, or MR_FATAL is received
-    return false;
 }
 
 void uart_protocol_write_mr_v1(uint16_t trid, uint8_t status)
@@ -74,6 +69,28 @@ void uart_protocol_write_mr_v1(uint16_t trid, uint8_t status)
     uart_write((uint8_t *)&trid, 2);
 
     uart_write(&status, 1);
+}
+
+void uart_protocol_start_transmission(uint8_t msgid, transmissionTxHandler handler, void *ctx, uint16_t followups)
+{
+    // Get a transmission ID
+    txTransmissionCounter++;
+    uint16_t trid = txTransmissionCounter;
+
+    txTransmission tr = {
+        .handler = handler,
+        .ctx = ctx,
+        .following = followups,
+        .successful = 0,
+    };
+
+    txTransmissions[trid] = tr;
+
+    // Send first body part here in the base packet
+    uint8_t buf[TX_BODYSIZE];
+    uint16_t buflen = handler.getFirstBuffer(ctx, buf);
+
+    uart_protocol_write_base_v1(trid, msgid, followups, buf, buflen);
 }
 
 std::map<uint16_t, rxTransmission> rxTransmissions;
@@ -107,7 +124,7 @@ void uart_protocol_read_base_v1()
     crc = crc8(crc, &msgid, 1);
 
     // Get packet handler from msgid
-    packetRxHandler handler = uart_get_handler_from_msgid(msgid);
+    transmissionRxHandler handler = uart_get_handler_from_msgid(msgid);
     if (handler.transmissionFinished == nullptr)
     {
         // This means that ID was not found an handle
@@ -149,6 +166,9 @@ void uart_protocol_read_base_v1()
     // Handle body
     void *ctx = handler.firstBufferHandler(bodybuf, bodylen);
 
+    // End of the base packet
+    uart_protocol_write_mr_v1(trid, MR_SUCCESS);
+
     // Add to handlers, or finish here
     if (following == 0)
     {
@@ -163,9 +183,6 @@ void uart_protocol_read_base_v1()
         };
         rxTransmissions[trid] = tr;
     }
-
-    // End of the base packet
-    uart_protocol_write_mr_v1(trid, MR_SUCCESS);
 }
 
 void uart_protocol_read_followup_v1()
@@ -328,4 +345,6 @@ void uart_init()
 void uart_free()
 {
     vTaskDelete(rxTask);
+    rxTransmissions.clear();
+    txTransmissions.clear();
 }

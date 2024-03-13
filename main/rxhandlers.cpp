@@ -8,7 +8,13 @@ void protocol_version_request(void *ctx, bool invalidateData)
         return;
 
     uint8_t pl = LATEST_SUPPORTED_VERSION;
-    uart_protocol_write_base_v1(PROTOCOL_VERSION_RES, 0, &pl, 1);
+    txShortBodyContext sbctx = {
+        .size = 1,
+        .data = &pl,
+    };
+
+    uart_protocol_start_transmission(
+        PROTOCOL_VERSION_RES, TX_SHORT_BODY_HANDLER, &sbctx, 0);
 }
 
 void *handler_no_action(uint8_t *buf, size_t buflen)
@@ -21,20 +27,20 @@ void handler_following_no_action(void *ctx, uint8_t *buf, size_t buflen)
     return;
 }
 
-void packet_finished_no_action(void *ctx, bool invalidateData)
+void transmission_finished_no_action(void *ctx, bool invalidateData)
 {
     return;
 }
 
-static std::map<uint8_t, packetRxHandler> handlers = {
-    {PROTOCOL_VERSION_REQ, NO_BODY_HANDLER(protocol_version_request)},
+static std::map<uint8_t, transmissionRxHandler> handlers = {
+    {PROTOCOL_VERSION_REQ, RX_NO_BODY_HANDLER(protocol_version_request)},
 };
 
-packetRxHandler uart_get_handler_from_msgid(uint8_t id)
+transmissionRxHandler uart_get_handler_from_msgid(uint8_t id)
 {
     if (handlers.find(id) == handlers.end())
     {
-        return NO_BODY_HANDLER(nullptr);
+        return RX_NO_BODY_HANDLER(nullptr);
     }
     return handlers[id];
 }

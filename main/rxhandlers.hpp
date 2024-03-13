@@ -7,15 +7,15 @@
 void *handler_no_action(uint8_t *buf, size_t buflen);
 void handler_following_no_action(void *ctx, uint8_t *buf, size_t buflen);
 
-#define NO_BODY_HANDLER(packetFinishedHandler)                 \
-    (packetRxHandler)                                          \
+#define RX_NO_BODY_HANDLER(transmissionFinishedHandler)        \
+    (transmissionRxHandler)                                    \
     {                                                          \
         .firstBufferHandler = handler_no_action,               \
         .followingBufferHandler = handler_following_no_action, \
-        .transmissionFinished = packetFinishedHandler,         \
+        .transmissionFinished = transmissionFinishedHandler,   \
     }
 
-struct packetRxHandler
+struct transmissionRxHandler
 {
     // If data received in buffers is not satisfying, just ignore it.
     // This one returns a pointer that must me forwarded to the other functions
@@ -30,5 +30,5 @@ struct packetRxHandler
     void (*transmissionFinished)(void *ctx, bool invalidateData);
 };
 
-packetRxHandler uart_get_handler_from_msgid(uint8_t id);
+transmissionRxHandler uart_get_handler_from_msgid(uint8_t id);
 #endif // __RXHANDLERS_H__
