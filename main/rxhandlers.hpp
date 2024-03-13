@@ -1,3 +1,6 @@
+#ifndef __RXHANDLERS_H__
+#define __RXHANDLERS_H__
+
 #include <inttypes.h>
 #include <stdio.h>
 
@@ -5,14 +8,14 @@ void *handler_no_action(uint8_t *buf, size_t buflen);
 void handler_following_no_action(void *ctx, uint8_t *buf, size_t buflen);
 
 #define NO_BODY_HANDLER(packetFinishedHandler)                 \
-    (packetHandler)                                            \
+    (packetRxHandler)                                          \
     {                                                          \
         .firstBufferHandler = handler_no_action,               \
         .followingBufferHandler = handler_following_no_action, \
-        .packetFinished = packetFinishedHandler,               \
+        .transmissionFinished = packetFinishedHandler,         \
     }
 
-struct packetHandler
+struct packetRxHandler
 {
     // If data received in buffers is not satisfying, just ignore it.
     // This one returns a pointer that must me forwarded to the other functions
@@ -24,7 +27,8 @@ struct packetHandler
     // Response packets must only be sent when this function is called.
     // When invalidateData is set to true, all buffer content already sent before must be reset.
     // So data received should not have consequencies until this function is called.
-    void (*packetFinished)(void *ctx, bool invalidateData);
+    void (*transmissionFinished)(void *ctx, bool invalidateData);
 };
 
-packetHandler uart_get_handler_from_id(uint8_t id);
+packetRxHandler uart_get_handler_from_msgid(uint8_t id);
+#endif // __RXHANDLERS_H__

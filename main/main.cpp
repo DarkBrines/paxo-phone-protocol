@@ -6,7 +6,7 @@
 
 extern "C" void app_main()
 {
-    TaskHandle_t uart_task = uart_init();
+    uart_init();
     keyboard_init();
 
     printf("Phone booted\n");
@@ -19,8 +19,6 @@ extern "C" void app_main()
     wait_for_key_release();
 
     printf("Shutting down...\n");
-
-    vTaskDelete(uart_task);
 
     // Artificial shutdown delay
     vTaskDelay(2000 / portTICK_PERIOD_MS);

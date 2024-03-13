@@ -1,4 +1,4 @@
-#include "handlers.hpp"
+#include "txhandlers.hpp"
 #include "protocol.hpp"
 #include <map>
 
@@ -26,11 +26,11 @@ void packet_finished_no_action(void *ctx, bool invalidateData)
     return;
 }
 
-static std::map<uint8_t, packetHandler> handlers = {
+static std::map<uint8_t, packetRxHandler> handlers = {
     {PROTOCOL_VERSION_REQ, NO_BODY_HANDLER(protocol_version_request)},
 };
 
-packetHandler uart_get_handler_from_id(uint8_t id)
+packetRxHandler uart_get_handler_from_msgid(uint8_t id)
 {
     if (handlers.find(id) == handlers.end())
     {

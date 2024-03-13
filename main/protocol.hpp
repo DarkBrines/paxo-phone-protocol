@@ -3,7 +3,7 @@
 #include "freertos/task.h"
 
 #define UART_PORT UART_NUM_0
-#define RX_BODYSIZE 2048
+#define RX_BODYSIZE 1024 * 2
 #define TX_BODYSIZE RX_BODYSIZE
 #define RX_TIMEOUT 10000 / portTICK_PERIOD_MS
 
@@ -17,10 +17,6 @@
 #define MR_SUCCESS 0xA0
 #define MR_FAIL 0xA1
 #define MR_FATAL 0xA2
-
-#define SEND_MR(id, status)                                         \
-    uint8_t mapl[4] = {MAGICNUMBER_V1, MAGICNUMBER_MR, id, status}; \
-    uart_write(mapl, 4)
 
 #define METADATA_REQ 0x00
 #define METADATA_RES 0x01
@@ -44,7 +40,24 @@
 
 #define LATEST_SUPPORTED_VERSION 1
 
-TaskHandle_t uart_init();
+#include "rxhandlers.hpp"
+#include "txhandlers.hpp"
+struct rxTransmission
+{
+    packetRxHandler handler;
+    void *ctx;
+    uint32_t following;
+};
+
+struct txTransmission
+{
+    packetTxHandler handler;
+    void *ctx;
+    uint32_t following;
+    uint32_t successful;
+};
+
+void uart_init();
 
 // This function will return true when the write was a success, and false otherwise.
 bool uart_protocol_write_base_v1(uint8_t id, uint32_t following, uint8_t *body, uint16_t bodylen);

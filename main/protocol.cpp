@@ -1,66 +1,139 @@
 #include <map>
 #include <inttypes.h>
 #include "protocol.hpp"
-#include "handlers.hpp"
+#include "rxhandlers.hpp"
+#include "txhandlers.hpp"
 #include "driver/uart.h"
 #include "crc.hpp"
+#include "freertos/queue.h"
 
 void uart_write(uint8_t *buf, size_t len)
 {
     uart_write_bytes(UART_PORT, buf, len);
 }
 
+uint16_t txTransmissionCounter;
+std::map<uint16_t, txTransmission> txTransmissions;
+
+bool uart_protocol_write_base_v1(uint16_t trid, uint8_t msgid, uint32_t following, uint8_t *body, uint16_t bodylen)
+{
+    uint8_t crc;
+
+    uint8_t magics[2] = {MAGICNUMBER_V1, MAGICNUMBER_BASE_PACKET};
+    uart_write(magics, 2);
+    crc = crc8(0x00, magics, 2);
+
+    uart_write((uint8_t *)&trid, 2);
+    crc = crc8(crc, (uint8_t *)&trid, 2);
+
+    uart_write(&msgid, 1);
+    crc = crc8(crc, &msgid, 1);
+
+    uart_write((uint8_t *)&following, 4);
+    crc = crc8(crc, (uint8_t *)&following, 4);
+
+    uart_write((uint8_t *)&bodylen, 2);
+    crc = crc8(crc, (uint8_t *)&bodylen, 2);
+
+    uart_write(body, bodylen);
+    crc = crc8(crc, body, bodylen);
+
+    uart_write(&crc, 1);
+
+    return false;
+}
+
+bool uart_protocol_write_followup_v1(uint16_t trid, uint8_t *body, uint16_t bodylen)
+{
+    uint8_t crc;
+
+    uint8_t magics[2] = {MAGICNUMBER_V1, MAGICNUMBER_FOLLOWUP_PACKET};
+    uart_write(magics, 2);
+    crc = crc8(0x00, magics, 2);
+
+    uart_write((uint8_t *)&trid, 2);
+    crc = crc8(crc, (uint8_t *)&trid, 2);
+
+    uart_write((uint8_t *)&bodylen, 2);
+    crc = crc8(crc, (uint8_t *)&bodylen, 2);
+
+    uart_write(body, bodylen);
+    crc = crc8(crc, body, bodylen);
+
+    uart_write(&crc, 1);
+
+    // Will trigger if any byte is incorrect, or MR_FATAL is received
+    return false;
+}
+
+void uart_protocol_write_mr_v1(uint16_t trid, uint8_t status)
+{
+    uint8_t magics[2] = {MAGICNUMBER_V1, MAGICNUMBER_MR};
+    uart_write(magics, 2);
+
+    uart_write((uint8_t *)&trid, 2);
+
+    uart_write(&status, 1);
+}
+
+std::map<uint16_t, rxTransmission> rxTransmissions;
+
 bool uart_read(uint8_t *buf, size_t len, bool no_auto_ma = false)
 {
     int err = uart_read_bytes(UART_PORT, buf, len, RX_TIMEOUT);
     if (!no_auto_ma && err < 0)
     {
-        SEND_MR(0xFF, MR_FATAL);
+        uart_protocol_write_mr_v1(0xFF, MR_FATAL);
         return false;
     }
 
     return !no_auto_ma;
 }
 
-void uart_protocol_read_v1()
+void uart_protocol_read_base_v1()
 {
     // Init calculated CRC with already read magic number
     uint8_t magics[2] = {MAGICNUMBER_V1, MAGICNUMBER_BASE_PACKET};
     uint8_t crc = crc8(0x00, magics, 2);
 
-    // Read packet ID
-    uint8_t id;
-    uart_read(&id, 1);
-    crc = crc8(crc, &id, 1);
+    // Read transmission ID
+    uint16_t trid;
+    uart_read((uint8_t *)&trid, 2);
+    crc = crc8(crc, (uint8_t *)&trid, 2);
 
-    // Get packet handler from id
-    packetHandler handler = uart_get_handler_from_id(id);
-    if (handler.packetFinished == nullptr)
+    // Read message ID
+    uint8_t msgid;
+    uart_read(&msgid, 1);
+    crc = crc8(crc, &msgid, 1);
+
+    // Get packet handler from msgid
+    packetRxHandler handler = uart_get_handler_from_msgid(msgid);
+    if (handler.transmissionFinished == nullptr)
     {
         // This means that ID was not found an handle
-        SEND_MR(id, MR_FATAL);
+        uart_protocol_write_mr_v1(trid, MR_FATAL);
         return;
     }
-
-    // Read body length
-    uint16_t bodylen;
-    uart_read((uint8_t *)&bodylen, 2);
-
-    // Avoid bodies too large for the little memory
-    if (bodylen > RX_BODYSIZE)
-    {
-        SEND_MR(id, MR_FATAL);
-        return;
-    }
-    crc = crc8(crc, (uint8_t *)&bodylen, 2);
 
     // Read number of followups
     uint32_t following;
     uart_read((uint8_t *)&following, 4);
     crc = crc8(crc, (uint8_t *)&following, 4);
 
+    // Read body length
+    uint16_t bodylen;
+    uart_read((uint8_t *)&bodylen, 2);
+    crc = crc8(crc, (uint8_t *)&bodylen, 2);
+
+    // Avoid bodies too large for the little memory
+    if (bodylen > RX_BODYSIZE)
+    {
+        uart_protocol_write_mr_v1(trid, MR_FATAL);
+        return;
+    }
+
     // Read body
-    uint8_t bodybuf[RX_BODYSIZE];
+    uint8_t bodybuf[bodylen];
     uart_read(bodybuf, bodylen);
     crc = crc8(crc, bodybuf, bodylen);
 
@@ -69,71 +142,136 @@ void uart_protocol_read_v1()
     uart_read(&rcrc, 1);
     if (crc != rcrc)
     {
-        SEND_MR(id, MR_FAIL); // Softfail, because a incorrect crc can be caused by a transport problem.
+        uart_protocol_write_mr_v1(trid, MR_FAIL); // Softfail, because an incorrect crc can be caused by a transport problem. Must retry
         return;
     }
 
     // Handle body
     void *ctx = handler.firstBufferHandler(bodybuf, bodylen);
 
-    // End of the base packet
-    SEND_MR(id, MR_SUCCESS);
-
-    // Receive followup packets
-    // When receiving them, already alocated memory values will be reused for memory efficiency
-    for (size_t i = 1; i < following + 1; i++) // "i" is 1-based, because if the first followup packet is retried, he will go is initial value minus 1 for a bit
+    // Add to handlers, or finish here
+    if (following == 0)
     {
-        // Magic numbers
-        uint8_t magic1;
-        uart_read(&magic1, 1);
-        uint8_t magic2;
-        uart_read(&magic2, 1);
-
-        if (magic1 != MAGICNUMBER_V1 || magic2 != MAGICNUMBER_FOLLOWUP_PACKET)
-        {
-            SEND_MR(id, MR_FATAL);
-            return;
-        }
-
-        // Restart CRC calculation for this followup packet
-        crc = crc8(0x00, &magic1, 1);
-        crc = crc8(crc, &magic2, 1);
-
-        // Read body length
-        uart_read((uint8_t *)&bodylen, 2);
-
-        // Avoid bodies too large for the little memory
-        if (bodylen > RX_BODYSIZE)
-        {
-            SEND_MR(id, MR_FATAL);
-            handler.packetFinished(ctx, true);
-            return;
-        }
-        crc = crc8(crc, (uint8_t *)&bodylen, 2);
-
-        // Read body
-        uart_read((uint8_t *)&bodybuf, bodylen);
-        crc = crc8(crc, (uint8_t *)&bodybuf, bodylen);
-
-        // Check CRC
-        uint8_t rcrc;
-        uart_read(&rcrc, 1);
-        if (crc != rcrc)
-        {
-            SEND_MR(id, MR_FAIL);
-            i--; // iteration must be redone.
-            continue;
-        }
-
-        // Handle body
-        handler.followingBufferHandler(ctx, bodybuf, bodylen);
-
-        // End of the followup packet
-        SEND_MR(id, MR_SUCCESS);
+        handler.transmissionFinished(ctx, false);
+    }
+    else
+    {
+        rxTransmission tr = {
+            .handler = handler,
+            .ctx = ctx,
+            .following = following,
+        };
+        rxTransmissions[trid] = tr;
     }
 
-    // End of the packet chain.
-    handler.packetFinished(ctx, false);
+    // End of the base packet
+    uart_protocol_write_mr_v1(trid, MR_SUCCESS);
+}
+
+void uart_protocol_read_followup_v1()
+{
+    // Init calculated CRC with already read magic number
+    uint8_t magics[2] = {MAGICNUMBER_V1, MAGICNUMBER_FOLLOWUP_PACKET};
+    uint8_t crc = crc8(0x00, magics, 2);
+
+    // Read transmission ID
+    uint16_t trid;
+    uart_read((uint8_t *)&trid, 2);
+    crc = crc8(crc, (uint8_t *)&trid, 2);
+
+    // Get transmission from ID
+    if (rxTransmissions.find(trid) == rxTransmissions.end())
+    {
+        uart_protocol_write_mr_v1(trid, MR_FATAL);
+        return;
+    }
+    rxTransmission tr = rxTransmissions[trid];
+
+    // Read body length
+    uint16_t bodylen;
+    uart_read((uint8_t *)&bodylen, 2);
+    crc = crc8(crc, (uint8_t *)&bodylen, 2);
+
+    // Avoid bodies too large for the little memory
+    if (bodylen > RX_BODYSIZE)
+    {
+        uart_protocol_write_mr_v1(trid, MR_FATAL);
+        return;
+    }
+
+    // Read body
+    uint8_t bodybuf[bodylen];
+    uart_read(bodybuf, bodylen);
+    crc = crc8(crc, bodybuf, bodylen);
+
+    // Check CRC
+    uint8_t rcrc;
+    uart_read(&rcrc, 1);
+    if (crc != rcrc)
+    {
+        uart_protocol_write_mr_v1(trid, MR_FAIL); // Softfail, because an incorrect crc can be caused by a transport problem. Must retry
+        return;
+    }
+
+    // From here, success
+    tr.handler.followingBufferHandler(tr.ctx, bodybuf, bodylen);
+    tr.following--;
+
+    if (tr.following == 0)
+    {
+        tr.handler.transmissionFinished(tr.ctx, false);
+        rxTransmissions.erase(trid);
+    }
+    else
+    {
+        // Save the decremental
+        rxTransmissions[trid] = tr;
+    }
+}
+
+// When this function is triggered, it means a microresponse
+// has been received. This function runtime will also take care
+// of calling back the related txTransmission and sending
+// the following packets
+void uart_protocol_read_mr_v1()
+{
+    // Read transmission ID
+    uint16_t trid;
+    uart_read((uint8_t *)&trid, 2);
+
+    // Get transmission from ID
+    if (txTransmissions.find(trid) == txTransmissions.end())
+    {
+        return; // Don't send a microresponse in response to a microresponse ;)
+    }
+    txTransmission tr = txTransmissions[trid];
+
+    // Read status
+    uint8_t status;
+    uart_read(&status, 1);
+
+    if (status == MR_FATAL)
+    {
+        txTransmissions.erase(trid);
+        return;
+    }
+    else if (status == MR_SUCCESS)
+    {
+        tr.successful++;
+        if (tr.successful >= tr.following + 1) // tr.successful also includes the base packet, that's why the +1
+        {
+            tr.handler.transmissionFinished(tr.ctx);
+            txTransmissions.erase(trid);
+            return;
+        }
+        txTransmissions[trid] = tr; // Save the tr.successful increment
+    }
+
+    // Arriving here means that the state is a success or a softfail, and that there is still followups to print
+    uint8_t buf[TX_BODYSIZE];
+    uint16_t buflen = tr.handler.getFollowupBuffer(tr.ctx, buf, tr.successful);
+
+    uart_protocol_write_followup_v1(trid, buf, buflen);
 }
 
 void uart_rx_task(void *arg)
@@ -150,95 +288,22 @@ void uart_rx_task(void *arg)
             uart_read(&magicnum2, 1);
 
             if (magicnum2 == MAGICNUMBER_BASE_PACKET)
-                uart_protocol_read_v1();
-            else if (magicnum2 != MAGICNUMBER_MR)
-            {
-                // Invalid request.
-                // Microresponses and followup packets shouldnt be handled here.
-                // And other garbage should not too.
-                // However, microresponses shouldnt be answered by another microresponse.
-                SEND_MR(0xFF, MR_FATAL);
-            }
+                uart_protocol_read_base_v1();
+
+            else if (magicnum2 == MAGICNUMBER_FOLLOWUP_PACKET)
+                uart_protocol_read_followup_v1();
+
+            else if (magicnum2 == MAGICNUMBER_MR)
+                uart_protocol_read_mr_v1();
         }
 
         // To avoid confusion with other stuff running on the line, invalid magic value in the first byte should be ignored.
     }
 }
 
-bool uart_protocol_write_base_v1(uint8_t id, uint32_t following, uint8_t *body, uint16_t bodylen)
-{
-    while (1) // Use a loop in case we need to resend it when a softfail occurs
-    {
-        uint8_t crc;
+TaskHandle_t rxTask;
 
-        uint8_t magics[2] = {MAGICNUMBER_V1, MAGICNUMBER_BASE_PACKET};
-        uart_write(magics, 2);
-        crc = crc8(0x00, magics, 2);
-
-        uart_write(&id, 1);
-        crc = crc8(crc, &id, 1);
-
-        uart_write((uint8_t *)&bodylen, 2);
-        crc = crc8(crc, (uint8_t *)&bodylen, 2);
-
-        uart_write((uint8_t *)&following, 4);
-        crc = crc8(crc, (uint8_t *)&following, 4);
-
-        uart_write(body, bodylen);
-        crc = crc8(crc, body, bodylen);
-
-        uart_write(&crc, 1);
-
-        // Receive microresponse
-        uint8_t rmr[4];
-        uart_read(rmr, 4);
-        if (rmr[0] == MAGICNUMBER_V1 && rmr[1] == MAGICNUMBER_MR && rmr[2] == id)
-        {
-            if (rmr[3] == MR_SUCCESS)
-                return true;
-            else if (rmr[3] == MR_FAIL)
-                continue;
-        }
-
-        // Will trigger if any byte is incorrect, or MR_FATAL is received
-        return false;
-    }
-}
-bool uart_protocol_write_followup_v1(uint8_t id, uint8_t *body, uint16_t bodylen)
-{
-    while (1) // Use a loop in case we need to resend it when a softfail occurs
-    {
-        uint8_t crc;
-
-        uint8_t magics[2] = {MAGICNUMBER_V1, MAGICNUMBER_FOLLOWUP_PACKET};
-        uart_write(magics, 2);
-        crc = crc8(0x00, magics, 2);
-
-        uart_write((uint8_t *)&bodylen, 2);
-        crc = crc8(crc, (uint8_t *)&bodylen, 2);
-
-        uart_write(body, bodylen);
-        crc = crc8(crc, body, bodylen);
-
-        uart_write(&crc, 1);
-
-        // Receive microresponse
-        uint8_t rmr[4];
-        uart_read(rmr, 4);
-        if (rmr[0] == MAGICNUMBER_V1 && rmr[1] == MAGICNUMBER_MR && rmr[2] == id)
-        {
-            if (rmr[3] == MR_SUCCESS)
-                return true;
-            else if (rmr[3] == MR_FAIL)
-                continue;
-        }
-
-        // Will trigger if any byte is incorrect, or MR_FATAL is received
-        return false;
-    }
-}
-
-TaskHandle_t uart_init()
+void uart_init()
 {
     uart_config_t uart_config = {
         .baud_rate = 115200,
@@ -255,8 +320,12 @@ TaskHandle_t uart_init()
     ESP_ERROR_CHECK(uart_param_config(UART_PORT, &uart_config));
 
     // Create RX task to receive packets
-    TaskHandle_t task;
-    xTaskCreate(uart_rx_task, "uart_rx_task", 1024 * 4, NULL, configMAX_PRIORITIES - 1, &task);
+    xTaskCreate(uart_rx_task, "uart_rx_task", 1024 * 2, NULL, configMAX_PRIORITIES - 1, &rxTask);
 
-    return task;
+    txTransmissionCounter = 0;
+}
+
+void uart_free()
+{
+    vTaskDelete(rxTask);
 }

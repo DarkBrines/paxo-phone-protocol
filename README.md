@@ -43,6 +43,7 @@ Si une donnée non compréhensible intervient dans l'échange, ou qu'un timeout 
 
 ### Packet de type followup
 - Magic number = `0x91c2`
+- Transmission ID: 2 octets
 - Longueur du body: 2 octets
 - Body: X octets
 - Signature de sureté: 1 octet -> Un CRC-8/CCITT de toutes les valeurs ci-dessus. Si cette signature est incorrecte, une microréponse d'erreur doit être envoyée.
@@ -52,7 +53,7 @@ Les microréponses sont attendues dans tout les cas, mais leur transport correct
 Les erreurs statuées par les microréponses ne doivent uniquement être des erreurs pendant le transport. Si le format d'un corps n'est pas lisible, l'échange ne doit pas être répondu.
 
 - Magic number = `0x91c3`
-- ID du packet répondu: 1 octet
+- Transmission ID: 2 octets
 - Statut: 1 octet
   - `0xA0`: Le packet est arrivé sans problème. Si un packet de type followup est attendu ensuite, cette réponse demande son envoi.
   - `0xA1`: Une erreur est survenue, le destinataire attend un nouvel essai.
