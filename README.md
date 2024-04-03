@@ -1,27 +1,14 @@
-# Protocole UART PaxOS
+# CLI PaxOS
 
 # Usage de ce dépôt GitHub
 (A l'heure actuelle, aucune implémentation n'est terminée, et la V1 du protcole ne l'est probablement pas non plus)
 
-Ce dépôt contient une implémentation rudimentaire du protocole en C++. Pour l'intégrer au PaxOS, il faut faire abstraction des fichiers keyboard et main, et copier les autres dans la source. Appeller `uart_init` au démarrage pour initialiser le protocole. Il faudra également ajouter les nécéssités d'intégration au reste du code, majoritairement dans `handlers.cpp`.
-Cette implémentation est agencée pour tourner sur mon installation personnelle. Pensez à modifier avant de flasher.
-
 Ce dépôt contient aussi les implémentations pour l'hôte, en Python et en JavaScript (passe par la technologie WebSerial).
 
-# Glossaire
-- Packet: Ensemble de données organisées, communiquées à travers le protocole UART. Les *packets de base*, *packets de types followup* et les *microréponses* sont considérées comme des packets.
-- Transmission: Ensemble de packets envoyés dans les 2 sens, dans le but de transmettre un message.
-- Message: Ordres et informations transitant de l'appareil vers l'hôte, et inversement.
+# Idée de base
+Pour une simplicité utilisateur, le modèle UART se fera autour d'un invité de commande alimenté par l'appareil. Les commandes seront dans intuitives, et une commande `help` sera fournie. Toute commande commancant par un symbole `~` indique une commande qui se fera programmatiquement. Certaines commandes ne sont pas disponibles en mode programme, et d'autres ne sont pas disponibles en mode utilisateur.
 
-# Pratiques de mise en oeuvre
-Ce protocole sera peut-être étendu plus tard, ce qui justifie la présence de versions.
-
-Ce protocole est basé la plupart du temps sur un modèle de Demande/Réponse.
-Les identifiants utilisables par les messages suivant ce modèle sont situés entre `0x00` et `0xEF`.
-
-Les magics numbers font toujours 2 octets: le premier octet différencie la version et le 2ème octet différencie le type de packet (base, followup, microréponse)
-
-Si une donnée non compréhensible intervient dans l'échange, ou qu'un timeout est atteint, le destinataire doît envoyer une microréponse de version 1, avec un statut de `0xA2`. Il est conseillé d'attendre la fin de la récéption de données après l'envoi de cette microréponse.
+Du côté appareil en C++, une API ouverte est disponible pour implémenter l'invité à travers d'autres protocoles
 
 # Configuration UART
 - Fréquence: 115200 Hz
@@ -30,229 +17,295 @@ Si une donnée non compréhensible intervient dans l'échange, ou qu'un timeout 
 - Stop de 1 bit
 - Flow control: CTS/RTS
 
-# Format des packets
-## Version 1
-### Packet de base
-- Magic number = `0x91c1`
-- Transmission ID: 2 octets -> Identifie la transmission pour les packets followups et les microréponses. Pour éviter deux transmissions avec le même identifiant, il est conseillé d'utiliser un compteur.
-- Message ID: 1 octet -> Identifie le sujet du message
-- Following: 4 octets -> Indique le nombre de packets de type followup
-- Longueur du body: 2 octets
-- Body: X octets -> Il est attendu qu'un body fasse une taille maximale de 2048 octets, et que si des packets de type followup sont attendus, il atteigne sa taille maximale. Du aux capacités de mémoire limitées de l'appareil recevant, il est envisagable que l'appareil concerné rejette un packet ne suivant pas ces instructions.
-- Signature de sureté: 1 octet -> Un CRC-8/CCITT de toutes les valeurs ci-dessus. Si cette signature est incorrecte, une microréponse d'erreur doit être envoyée.
+# Arbre des commandes
 
-### Packet de type followup
-- Magic number = `0x91c2`
-- Transmission ID: 2 octets
-- Longueur du body: 2 octets
-- Body: X octets
-- Signature de sureté: 1 octet -> Un CRC-8/CCITT de toutes les valeurs ci-dessus. Si cette signature est incorrecte, une microréponse d'erreur doit être envoyée.
+- `info`: Indique la plupart des métadonnées de l'appareil
 
-### Microréponse à un packet de base ou de type followup
-Les microréponses sont attendues dans tout les cas, mais leur transport correct n'est pas vérifié. Si une microréponse n'est pas transmise pour quelque raison après une limite de temps, le destinataire doit réessayer l'envoi du packet avant de se déclarer en échec.
-Les erreurs statuées par les microréponses ne doivent uniquement être des erreurs pendant le transport. Si le format d'un corps n'est pas lisible, l'échange ne doit pas être répondu.
+  - `hostname`: Donne le nom de l'appareil
+  - `mac`: Donne les adresses MAC
+    - `ble`: Donne l'adresse MAC pour module Bluetooth
+    - `wifi`: Donne l'adresse MAC pour module WiFi
+  - `version`: Donne la version de l'appareil
+  - `hardware`: Indique les révisions du matériel physique utilisé
+- `echo`: Active ou désactive le renvoi des caractères écrits.
+- `apps`: Liste les applications installées
+  - `install`: Installe une application (seulement en mode programme)
+  - `remove <appid>`: Désinstalle l'application spécifiée
+  - `launch <appid>`: Démarre l'application spécifiée. (Peut échouer)
+  - `show <appid>`: Donne les details d'une application
+    - `path`: Donne le chemin d'accès de l'application spécifiée.
+- `files`: Ouvre un gestionnaire de fichiers sh-like.
+- `files <cmd...>`: Execute une action dans le gestionnaire de fichiers, puis quitte.
+- `elevate <permission>`: Demande une ou plusieurs permissions d'accès pour l'invité. Cette commande engendrera un message de confiramtion sur l'écran de l'appareil.
+  - `cellular`: Demande les permissions pour les informations du module réseau
+  - `*`: Demande l'accès à toutes les permissions
+- `lte`: *Groupe de commandes* (**Nécéssite la permission `cellular`**) (seulement en mode programme)
+  - `sendraw <cmd>`: Envoie une commande directe au module cellulaire de l'appareil, la réponse est renvoyée. 
+  - `imei`: Donne l'IMEI du module réseau
+  - `imsi`: Donne l'IMSI de la carte SIM
 
-- Magic number = `0x91c3`
-- Transmission ID: 2 octets
-- Statut: 1 octet
-  - `0xA0`: Le packet est arrivé sans problème. Si un packet de type followup est attendu ensuite, cette réponse demande son envoi.
-  - `0xA1`: Une erreur est survenue, le destinataire attend un nouvel essai.
-  - `0xA2`: Une erreur est survenue, le destinataire n'attend pas de nouvel essai.
 
-# Groupes d'indentifiants de messages
-- `0x00 -> 0x0F`: Demandes d'informations
-- `0x10 -> 0x1F`: Installation des applications
-- `0x20 -> 0x2F`: Mise à jour logicielles
-- `0x30 -> 0x3F`: Gestion des fichiers à distance
-- `0x60 -> 0x6F`: Transferts de données de masse
+## Commandes du gestionnaire de fichiers
 
-# Contenu des messages
-## Message METADATA_REQ (`0x00`)
-| Depuis la version 1 | Provient de l'hôte | Sans données |
-|-|-|-|
+- `ls [path]`: Liste le contenu du dossier spécifié, ou du dossier courant. (Alias: `dir`)
 
-Demande à l'appareil ses métadonnées publiques.
+- `cd <path>`: Change le répertoire courant pour le dossier spécifié (seulement en mode utilisateur)
+- `pwd`: Affiche le répertoire courant (seulement en mode utilisateur)
+- `touch <path>`: Crée un fichier
+- `mkdir <path>`: Crée un dossier
+- `rm <path>`: Supprime un dossier ou fichier
+- `cp <src> <dst>`: Copie un fichier
+- `mv <src> <dst>`: Deplace un fichier
+- `upload <path>`: Télécharge un fichier sur l'appareil (seulement en mode programme)
+- `download <path>`: Télécharge un fichier depuis l'appareil
 
-## Message METADATA_RES (`0x01`)
-| Depuis la version 1 | Provient de l'appareil | 20 octets |
-|-|-|-|
+# Envoi d'une commande en mode programme
+L'appareil est prêt à recevoir des instructions dès que les caractères `>>>` sont affichés (Si l'echo est désactivé, l'invité affichera `>!>`). Après ca, toutes les entrées suivantes seront considérées comme des entrées de commande.
 
-Répond à l'hôte les métadonnées publiques de l'appareil.
+L'hôte ne doit pas oublier de prefixer la commande avec `~`. Pour terminer la commande, un retour à la ligne (0x0C) ou le caractère nul (0x00) peuvent être utilisés. Si le retour à la ligne est utilisé, il sera répété, mais pas le caractère nul.
 
-- Nom d'hôte: 16 octets
-- Version majeure de PaxOS: 2 octets
-- Version mineure de PaxOS: 2 octets
+Dès que l'hôte est près à commencer l'échange, il écrira `OK` (0x4F4B), ou `KO` (0x4B4F) si la commande a échoué à l'initialisation. Si elle échoue, l'échange sera aussitôt annulé et l'invité réapparaitra.
 
-## Message CHECK_APP_REQ (`0x02`)
-| Depuis la version 1 | Provient de l'hôte | Contient des données |
-|-|-|-|
+# Echanges en mode programme
+Pour chaque commande compatible programme, le descriptif suivant indiquera un échange type.
 
-Demande à l'appareil si une application tierce est installée.
+## `info`
+| Minimum 23 octets |
+|-|
 
-- Taille de l'identifiant de l'application: 2 octets
-- Identifiant de l'application: X octets
+**L'appareil envoie:**
+- Version du firmware (2 octets)
+- Indicateur du hardware utilisé (8 octets, réservé)
+- Nom d'hôte (taille variable, chaîne de caractères terminée par 0x00)
+- Adresse MAC Bluetooth (6 octets)
+- Adresse MAC WiFi (6 octets)
 
-## Message CHECK_APP_RES (`0x03`)
-| Depuis la version 1 | Provient de l'appareil | 1 octet |
-|-|-|-|
 
-Répond à l'hôte sur le statut de l'installation d'une application.
+## `info hostname`
+| Minimum 1 octet |
+|-|
 
-- Statut: 1 octet
-  - `0x00`: Non installé
-  - `0x01`: Installé
+**L'appareil envoie:**
+- Nom d'hôte (taille variable, chaîne de caractères terminée par 0x00)
 
-## Message LIST_APPS_REQ (`0x04`)
-| Depuis la version 1 | Provient de l'hôte | 1 octet |
-|-|-|-|
 
-Demande à l'appareil une liste des applications tierces installées.
-Pour que cette réponse soit envoyée, l'utilisateur doit effectuer une confirmation sur l'écran de l'appareil.
+## `info mac`
+| 12 octets |
+|-|
 
-- Informations demandées: 1 octet
-  - Bit 1: Présence de la taille de l'application
-  - Bit 2: Présence de la date d'installation
-  - Si des bits superflus sont présent dans l'octet, ils doivent être ignorés. Cela permet l'usage de la valeur `0xFF` pour demander toutes les informations optionnelles.
+**L'appareil envoie:**
+- Adresse MAC Bluetooth (6 octets)
+- Adresse MAC WiFi (6 octets)
 
-## Message LIST_APPS_RES (`0x05`)
-| Depuis la version 1 | Provient de l'appareil | Contient des données |
-|-|-|-|
 
-Répond à l'hôte la liste des applications tierces installées.
+## `info mac <component>`
+| 6 octets |
+|-|
 
-- Nombre d'applications: 4 octets
+**L'appareil envoie:**
+- Adresse MAC du composant demandé (6 octets)
+
+
+## `info version`
+| 2 octets |
+|-|
+
+**L'appareil envoie:**
+- Version du firmware (2 octets)
+
+## `info hardware`
+| 8 octets |
+|-|
+
+**L'appareil envoie:**
+- Indicateur du hardware utilisé (8 octets, réservé)
+
+
+## `apps`
+| Minimum 2 octets |
+|-|
+
+**L'appareil envoie:**
+- Nombre d'application installées (2 octets)
 - Pour chaque application:
-  - Taille de l'identifiant de l'application: 2 octets
-  - Identifiant de l'application: X octets
-  - *Taille de l'application: 4 octets*
-  - *Date d'installation: 4 octets*
+  - AppID (taille variable, chaîne de caractères terminée par 0x00)
 
-## Message INSTALL_APP_REQ (`0x10`)
-| Depuis la version 1 | Provient de l'hôte | Contient des données |
-|-|-|-|
 
-Propose à l'appareil l'installation d'une application tierce.
+## `apps install`
+| Bidirectionnel |
+|-|
 
-- Taille totale de l'application: 4 octets
-- Taille du manifest: 4 octets
-- Manifest: X octets
+**L'hôte envoie:**
+- Chemin d'accès du fichier/dossier (taille variable, chaîne de caractères terminée par 0x00)
+- Flags d'installation (1 octet)
+  - Format du packet (2 bits)
+    - `0b00`: Dossier
+    - `0b01`: Archive tar
+    - `0b10`: Archive tar.gz
+    
+**L'appareil répond:**
+- Statut (1 octet)
+  - `0x00`: Succès de l'installation
+  - `0x01`: Erreur dans la décompression
+  - `0x02`: Erreur dans l'extraction de l'archive
+  - `0x10`: Manifest invalide
 
-## Message INSTALL_APP_RES (`0x11`)
-| Depuis la version 1 | Provient de l'appareil | 2 octets |
-|-|-|-|
 
-Réponse de l'appareil concernant la demande d'installation d'une application tierce.
-Pour que cette réponse soit envoyée, l'utilisateur doit effectuer une confirmation sur l'écran de l'appareil, et l'appareil doit vérifier qu'il dispose des capacités pour stocker cette installation.
-Noter que le manifest ne sera pas envoyé pendant cette installation, il devra être écrit dans la mémoire à partir du contenu du [message `0x10`](#message-install_app_req-0x10) précédemment envoyé.
+## `apps show <appid>`
+| Minimum 2 octets |
+|-|
 
-- Identifiant d'upload: 2 octets
+**L'appareil envoie:**
+- Taille du manifest (2 octets)
+- Manifest (X octets)
 
-## Message END_INSTALL (`0x12`)
-| Depuis la version 1 | Provient de l'hôte | Sans données |
-|-|-|-|
+## `apps launch <appid>`
+| 1 octet |
+|-|
 
-Annonce la fin d'une installation.
+**L'appareil envoie:**
+- Statut (1 octet)
+  - `0x00`: Succès du démarrage de l'application
+  - `0x01`: Application introuvable
+  - `0x02`: Appareil occupé
 
-## Message END_INSTALL_STATUS (`0x13`)
-| Depuis la version 1 | Provient de l'appareil | 1 octet |
-|-|-|-|
 
-Indique l'échec ou la réussite d'une installation.
-Quel que soit l'issue, l'installation s'arrête. Ce packet n'a aucune repercussion logicielle, il est juste destiné à un retour utilisateur.
+## `apps remove <appid>`
+| 1 octet |
+|-|
 
-- Résultat: 1 octet
-  - `0x00`: Succès de l'installation.
-  - `0x01`: Echec de l'installation, quelque soit la raison. (fichiers manquants, annulation de l'utilisateur...)
+**L'appareil envoie:**
+- Statut (1 octet)
+  - `0x00`: Succès de la désinstallation
+  - `0x01`: Application introuvable
 
-## Message REMOVE_APP_REQ (`0x14`)
-| Depuis la version 1 | Provient de l'hôte | Contient des données |
-|-|-|-|
 
-Propose à l'appareil la suppression d'une application tierce.
+## `files ls <path>`
+| Minimum 3 octets |
+|-|
 
-- Taille de l'identifiant de l'application: 2 octets
-- Identifiant de l'application: X octets
+> Même le statut est égal à autre chose que `0x00`, le nombre de fichiers doit être écrit et égal à 0.
 
-## Message REMOVE_APP_RES (`0x15`)
-| Depuis la version 1 | Provient de l'appareil | 1 octet |
-|-|-|-|
+**L'appareil envoie:**
+- Statut (1 octet)
+  - `0x00`: Succès
+  - `0x01`: Dossier introuvable
+  - `0x02`: Accès restreint
+- Nombre d'entrées (2 octets)
+- Pour chaque fichier:
+  - Flags (1 octet)
+    - Est un dossier (1 bit)
+    - Est corrompu (1 bit)
+  - Taille du fichier (4 octets)
+  - Nom (taille variable, chaîne de caractères terminée par 0x00)
 
-Réponse de l'appareil concernant la demande de suppression d'une application tierce.
-Pour que cette réponse soit envoyée, l'utilisateur doit effectuer une confirmation sur l'écran de l'appareil.
-Si la suppression est acceptée, cette réponse sera envoyée 2 fois: Pour avertir du démarrage de la suppression, et pour avertir de sa fin.
-Ce packet n'a aucune repercussion logicielle, il est juste destiné à un retour utilisateur.
 
-- Statut: 1 octet
-  - `0x00`: Suppression acceptée.
-  - `0x01`: Suppression terminée.
-  - `0x10`: Application introuvable.
-  - `0xFF`: Suppression refusée.
+## `files mkdir <path>`
+| 1 octet |
+|-|
 
-## Message FILE_UPLOAD (`0x60`)
-| Depuis la version 1 | Provient de l'hôte | Contient des données |
-|-|-|-|
+**L'appareil envoie:**
+- Statut (1 octet)
+  - `0x00`: Succès
+  - `0x01`: Dossier introuvable
+  - `0x02`: Accès restreint
 
-Envoi d'un fichier de l'hôte vers l'appareil.
 
-- Identifiant d'upload: 2 octets
-- Taille du nom de fichier: 2 octets
-- Nom du fichier: X octets -> Pour les fichiers dans des sous-dossiers, le nom du fichier fera office de chemin relatif à partir de la racine de l'installation. Les sous-dossiers ne sont pas annoncés et doivent être créés automatiquement.
-- Taille du fichier: 4 octets
-- Contenu du fichier: X octets
-- Signature de sureté: 8 octets -> CRC-32 du contenu du fichier seulement.
+## `files touch <path>`
+| 1 octet |
+|-|
 
-## Message FILE_UPLOAD_DONE (`0x61`)
-| Depuis la version 1 | Provient de l'appareil | 1 octet |
-|-|-|-|
+**L'appareil envoie:**
+- Statut (1 octet)
+  - `0x00`: Succès
+  - `0x01`: Dossier introuvable
+  - `0x02`: Accès restreint
 
-Indique l'échec ou la réussite du transfert d'un fichier.
 
-- Erreur: 1 octet
-  - `0x00`: Succès du transfert. L'hôte doit passer au fichier suivant.
-  - `0x01`: La signature de sureté ne correspond pas. L'hôte doit réessayer ce transfert.
-  - `0x02`: La mémoire des fichiers uploadés jusqu'à maintenant dépasse celle annoncée dans le [message `0x10`](#message-install_app_req-0x10) précédemment envoyé. L'installation s'arrête.
-  - `0x03`: L'identifiant d'upload n'est pas reconnu ou l'installation s'est déjà terminée. L'installation s'arrête.
-  - `0x04`: Le nom du fichier est invalide. L'installation s'arrête.
-  - `0x05`: Le délai d'attente à été dépassé pour l'envoi du packet (maximum 5s d'attente entre chaque octet). L'hôte doit réessayer ce transfert.
-  - `0xFF`: Autre erreur venant de l'appareil. L'installation s'arrête.
+## `files rm <path>`
+| 1 octet |
+|-|
 
-## Message FILE_DOWNLOAD (`0x62`)
-| Depuis la version 1 | Provient de l'hôte | Contient des données |
-|-|-|-|
+**L'appareil envoie:**
+- Statut (1 octet)
+  - `0x00`: Succès
+  - `0x01`: Fichier introuvable
+  - `0x02`: Accès restreint
 
-Demande de transfert d'un fichier de l'appareil vers l'hôte.
+## `files cp <src> <dst>`
+| 1 octet |
+|-|
 
-- Identifiant de download: 2 octets
-- Taille du nom de fichier: 2 octets
-- Nom du fichier: X octets -> Pour les fichiers dans des sous-dossiers, le nom du fichier fera office de chemin relatif.
+**L'appareil envoie:**
+- Statut (1 octet)
+  - `0x00`: Succès
+  - `0x01`: Fichier/dossier source introuvable
+  - `0x02`: Accès restreint au fichier source
+  - `0x03`: Fichier/dossier cible existe déjà
+  - `0x04`: Accès restreint au fichier cible
 
-## Message FILE_DOWNLOAD_DATA (`0x63`)
-| Depuis la version 1 | Provient de l'appareil | Contient des données |
-|-|-|-|
 
-Renvoie le fichier demandé par l'hôte.
+## `files cp <src> <dst>`
+| 1 octet |
+|-|
 
-- Taille du fichier: 4 octets
-- Contenu du fichier: X octets
-- Signature de sureté: 8 octets -> CRC-32 du contenu du fichier seulement
+**L'appareil envoie:**
+- Statut (1 octet)
+  - `0x00`: Succès
+  - `0x01`: Fichier/dossier source introuvable
+  - `0x02`: Accès restreint au fichier source
+  - `0x03`: Fichier/dossier cible existe déjà
+  - `0x04`: Accès restreint au fichier cible
 
-## Message PROTOCOL_VERSION_REQ (`0x7C`)
-| Depuis la version 1 | Provient de l'hôte | Sans données |
-|-|-|-|
 
-Demande à l'appareil la dernière version du protocole compatible.
-Ce packet est toujours envoyé dans le format de la version 1 du protocole.
+## `files upload <path>`
+| Bidirectionnel |
+|-|
 
-## Message PROTOCOL_VERSION_RES (`0x7D`)
-| Depuis la version 1 | Provient de l'appareil | 1 octet |
-|-|-|-|
+**L'hôte envoie:**
+- Taille totale du fichier (4 octets)
+- Nombre de blocs (4 octets)
 
-Réponse au [message `0x7C`](#message-protocol_version_req-0x7c)
+**L'appareil répond:**
+- Statut (1 octet)
+  - `0x00`: Prêt
+  - `0x01`: Le fichier existe déjà
+  - `0x02`: Accès restreint au dossier
 
-- Version: 1 octet
+> Si un autre statut que `0x00` est envoyé ici, l'échange doît s'arrêter.
 
-## Message ANNOUNCE_REVERSE_COMPATIBILITY (`0x7E`)
-| Depuis la version 1 | Spécial | Sans données |
-|-|-|-|
+**Pour chaque bloc, l'hôte envoie:**
+- Taille du bloc (2 octets)
+- Contenu du bloc (X octets)
+- CRC32 du contenu du bloc (4 octets)
 
-Annonce la compatibilité pour les packets non ordonnés.
+**Pour chaque bloc, l'appareil envoie:**
+- Statut (1 octet)
+  - `0x00`: Succès de la réception
+  - `0x01`: Erreur. Le bloc doit être réenvoyé.
+  - `0x02`: Erreur. L'échange doît être interrompu.
+
+
+## `files download <path>`
+| Bidirectionnel |
+|-|
+
+**L'appareil envoie:**
+- Taille totale du fichier (4 octets)
+- Nombre de blocs (4 octets)
+
+**L'hôte répond:**
+- Statut (1 octet)
+  - `0x00`: Prêt
+  - `0x01`: Annuler l'échange
+
+**Pour chaque bloc, l'appareil envoie:**
+- Taille du bloc (2 octets)
+- Contenu du bloc (X octets)
+- CRC32 du contenu du bloc (4 octets)
+
+**Pour chaque bloc, l'hôte envoie:**
+- Statut (1 octet)
+  - `0x00`: Succès de la réception
+  - `0x01`: Erreur. Le bloc doit être réenvoyé.
+  - `0x02`: Erreur. L'échange doît être interrompu.
