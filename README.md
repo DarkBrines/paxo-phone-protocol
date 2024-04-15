@@ -64,7 +64,7 @@ L'appareil est prêt à recevoir des instructions dès que les caractères `>>>`
 
 L'hôte ne doit pas oublier de prefixer la commande avec `~`. Pour terminer la commande, un retour à la ligne (0x0C) ou le caractère nul (0x00) peuvent être utilisés. Si le retour à la ligne est utilisé, il sera répété, mais pas le caractère nul.
 
-Dès que l'hôte est près à commencer l'échange, il écrira `OK` (0x4F4B), ou `KO` (0x4B4F) si la commande a échoué à l'initialisation. Si elle échoue, l'échange sera aussitôt annulé et l'invité réapparaitra.
+Dès que l'appareilest près à commencer l'échange, il écrira `OK` (0x4F4B), ou `KO` (0x4B4F) si la commande a échoué à l'initialisation. Si elle échoue, l'échange sera aussitôt annulé et l'invité réapparaitra.
 
 # Echanges en mode programme
 Pour chaque commande compatible programme, le descriptif suivant indiquera un échange type.
